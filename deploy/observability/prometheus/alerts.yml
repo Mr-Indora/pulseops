@@ -1,0 +1,42 @@
+groups:
+  - name: pulseops
+    rules:
+      - alert: HighLatencyP95
+        expr: histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket[1m]))) > 0.5
+        for: 30s
+        labels: {severity: warning}
+        annotations:
+          summary: "API p95 latency above 500ms"
+          description: "p95 request latency is {{ $value | humanizeDuration }} (1m window)."
+
+      - alert: HighErrorRate
+        expr: sum(rate(http_requests_total{status=~"5.."}[1m])) / sum(rate(http_requests_total[1m])) > 0.05
+        for: 30s
+        labels: {severity: critical}
+        annotations:
+          summary: "More than 5% of requests are failing with 5xx"
+          description: "5xx ratio is {{ $value | humanizePercentage }} (1m window)."
+
+      - alert: DBPoolSaturated
+        expr: db_pool_checked_out / db_pool_size >= 0.9
+        for: 30s
+        labels: {severity: warning}
+        annotations:
+          summary: "DB connection pool is at 90%+ utilisation"
+          description: "Pool utilisation is {{ $value | humanizePercentage }}; new requests will wait or time out."
+
+      - alert: SlowDBQueries
+        expr: histogram_quantile(0.95, sum by (le) (rate(db_query_duration_seconds_bucket[1m]))) > 0.3
+        for: 30s
+        labels: {severity: warning}
+        annotations:
+          summary: "p95 DB query duration above 300ms"
+          description: "p95 query duration is {{ $value | humanizeDuration }} (1m window)."
+
+      - alert: APIDown
+        expr: up{job="pulseops-api"} == 0
+        for: 15s
+        labels: {severity: critical}
+        annotations:
+          summary: "pulseops-api target is down"
+          description: "Prometheus cannot scrape pulseops-api:8000/metrics."

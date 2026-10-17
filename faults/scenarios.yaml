@@ -1,0 +1,44 @@
+# expected_alert / expected_diagnosis follow Blueprint 5.1 and 6; params feed faults/injector.py.
+scenarios:
+  - id: S1_db_latency
+    description: Toxiproxy latency toxic on the DB downstream path (+200ms, 50ms jitter).
+    workload_profile: normal
+    expected_alert: HighLatencyP95
+    expected_diagnosis: DB_LATENCY
+    fix_description: Remove the latency toxic from the postgres proxy.
+    params: {latency_ms: 200, jitter_ms: 50}
+  - id: S2_db_outage
+    description: Toxiproxy postgres proxy disabled; DB connections are refused or reset.
+    workload_profile: normal
+    expected_alert: HighErrorRate
+    expected_diagnosis: DB_DOWN
+    fix_description: Re-enable the proxy; the pool must recover without restarting the API.
+    params: {}
+  - id: S3_pool_exhaustion
+    description: No infra change; the pool_pressure workload (heavy /stats/top-products) saturates the 5-connection pool.
+    workload_profile: pool_pressure
+    expected_alert: DBPoolSaturated
+    expected_diagnosis: POOL_EXHAUSTION
+    fix_description: Stop the workload; durable fix is pool/timeout tuning or query optimisation.
+    params: {}
+  - id: S4_missing_index
+    description: "alembic downgrade -1 drops ix_orders_user_created."
+    workload_profile: normal
+    expected_alert: SlowDBQueries
+    expected_diagnosis: SLOW_QUERY_MISSING_INDEX
+    fix_description: "Ship the migration: alembic upgrade head recreates the index."
+    params: {}
+  - id: S5_cpu_throttle
+    description: "docker update --cpus 0.2 on the API container."
+    workload_profile: normal
+    expected_alert: HighLatencyP95
+    expected_diagnosis: CPU_SATURATION
+    fix_description: "Restore the CPU limit with docker update --cpus 1.0."
+    params: {cpus: 0.2, restore_cpus: 1.0}
+  - id: S6_crash_restart
+    description: "docker kill on the API container; the compose restart policy brings it back."
+    workload_profile: normal
+    expected_alert: APIDown
+    expected_diagnosis: APP_RESTART
+    fix_description: Automatic restart; recover() waits until /health/live returns 200.
+    params: {wait_live_s: 60}

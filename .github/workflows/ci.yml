@@ -1,0 +1,97 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "${{ env.PYTHON_VERSION }}", cache: pip }
+      - run: pip install ruff
+      - run: ruff check .
+
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: pulseops
+          POSTGRES_PASSWORD: pulseops
+          POSTGRES_DB: pulseops_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U pulseops" --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql+psycopg://pulseops:pulseops@localhost:5432/pulseops_test
+      JWT_SECRET: ci-only-not-a-secret
+      BCRYPT_ROUNDS: "4"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "${{ env.PYTHON_VERSION }}", cache: pip }
+      - run: pip install -e ".[dev,tools]"
+      # e2e needs the full compose stack; it has its own job below.
+      - run: pytest tests --ignore=tests/e2e -q
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "${{ env.PYTHON_VERSION }}", cache: pip }
+      - run: pip install -e ".[dev,tools]"
+      - run: pip-audit --skip-editable
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cp .env.example .env
+      - run: docker build -t pulseops-api:ci .
+      - run: docker compose config --quiet
+
+  # Manual only: compose up + seed + e2e (includes a short S2 run) costs several minutes.
+  e2e:
+    if: github.event_name == 'workflow_dispatch'
+    needs: [test, docker]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SEED_ORDERS: "20000"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "${{ env.PYTHON_VERSION }}", cache: pip }
+      - run: pip install -e ".[dev,tools]"
+      - run: |
+          cp .env.example .env
+          echo "JWT_SECRET=ci-only-not-a-secret" >> .env
+      - run: make up
+      - name: wait for API
+        run: |
+          for i in $(seq 1 60); do
+            curl -fs localhost:8000/health/ready && exit 0
+            sleep 2
+          done
+          docker compose logs --tail=100 && exit 1
+      - run: make seed
+      - run: pytest tests/e2e -v
+      - run: pytest tests/p7_workload/test_smoke.py -v
+        env: { PULSEOPS_API_URL: "http://localhost:8000", PULSEOPS_REQUIRE_SMOKE: "1" }
+      - if: always()
+        run: docker compose logs --tail=200
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with: { name: reports, path: reports/, if-no-files-found: ignore }
+      - if: always()
+        run: make down

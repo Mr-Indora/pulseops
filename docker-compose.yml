@@ -1,0 +1,100 @@
+name: pulseops
+
+# Memory caps sum to ~3.3 GB (jaeger 768m); check the effective limit with `docker inspect -f {{.HostConfig.Memory}} <name>`.
+services:
+  postgres:
+    image: postgres:16.4
+    environment:
+      POSTGRES_USER: pulseops
+      POSTGRES_PASSWORD: pulseops
+      POSTGRES_DB: pulseops
+    ports: ["5432:5432"]
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pulseops -d pulseops"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    mem_limit: 1g
+
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.9.0
+    # -host is repeated on purpose: overriding the command drops the image's default -host.
+    command: ["-host=0.0.0.0", "-config=/config/toxiproxy.json"]
+    ports: ["8474:8474"]
+    volumes: ["./faults/toxiproxy.json:/config/toxiproxy.json:ro"]
+    healthcheck:
+      test: ["CMD", "/toxiproxy-cli", "list"]  # scratch image: no shell, no curl
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    mem_limit: 64m
+
+  api:
+    build: .
+    image: pulseops-api:local
+    container_name: pulseops-api
+    cpus: "1.0"
+    restart: unless-stopped
+    stop_grace_period: 30s
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://pulseops:pulseops@toxiproxy:5433/pulseops}
+      MIGRATION_DATABASE_URL: ${MIGRATION_DATABASE_URL:-postgresql+psycopg://pulseops:pulseops@postgres:5432/pulseops}
+      JWT_SECRET: ${JWT_SECRET:?copy .env.example to .env and set JWT_SECRET}
+      JWT_EXPIRE_MINUTES: ${JWT_EXPIRE_MINUTES:-30}
+      BCRYPT_ROUNDS: ${BCRYPT_ROUNDS:-10}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://jaeger:4318}
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-pulseops-api}
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
+      DB_POOL_TIMEOUT: ${DB_POOL_TIMEOUT:-2}
+      DB_STATEMENT_TIMEOUT_MS: ${DB_STATEMENT_TIMEOUT_MS:-3000}
+    ports: ["8000:8000"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      toxiproxy: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:8000/health/live', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
+    mem_limit: 512m
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    ports: ["9090:9090"]
+    volumes: ["./deploy/observability/prometheus:/etc/prometheus:ro"]
+    mem_limit: 512m
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    ports: ["3000:3000"]
+    volumes:
+      - ./deploy/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    mem_limit: 384m
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+      MEMORY_MAX_TRACES: "5000"  # in-memory store; 20000 made /api/traces time out on the target laptop (audit)
+    ports: ["16686:16686", "4318:4318"]
+    mem_limit: 768m
+
+  postgres-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.15.0
+    environment:
+      DATA_SOURCE_NAME: postgresql://pulseops:pulseops@postgres:5432/pulseops?sslmode=disable
+    ports: ["9187:9187"]
+    depends_on:
+      postgres: {condition: service_healthy}
+    mem_limit: 64m
+
+volumes:
+  pgdata:

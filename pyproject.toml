@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pulseops"
+version = "0.1.0"
+description = "Orders API plus a harness that injects real failures, diagnoses them and verifies the fix"
+requires-python = ">=3.12"
+# Runtime only. The Dockerfile installs exactly this list.
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn>=0.30",
+  "sqlalchemy>=2.0.30,<2.1",  # OTel SQLAlchemy instrumentation refuses 2.1.x (no DB spans)
+  "psycopg[binary]>=3.2",
+  "alembic>=1.13",
+  "pydantic-settings>=2.4",
+  "pyjwt>=2.9",
+  "bcrypt>=4.2",
+  "structlog>=24.4",
+  "prometheus-client>=0.20",
+  "opentelemetry-sdk>=1.27",
+  "opentelemetry-exporter-otlp-proto-http>=1.27",
+  "opentelemetry-instrumentation-fastapi>=0.48b0",
+  "opentelemetry-instrumentation-sqlalchemy>=0.48b0",
+  "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.3", "ruff>=0.6", "pip-audit>=2.7"]
+tools = ["locust>=2.31", "pyyaml>=6.0", "httpx>=0.27"]
+
+# Nothing is installed as a package: code runs from the repo root (flat layout).
+[tool.setuptools]
+packages = []
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+# E501: long lines are only cosmetic and we do not run the formatter. B008: FastAPI's Depends/Query idiom.
+ignore = ["E501"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Header"]
