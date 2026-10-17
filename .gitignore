@@ -10,3 +10,6 @@ dist/
 reports/
 
 .env
+
+# Personal development notes
+/PART_*_NOTES.md
